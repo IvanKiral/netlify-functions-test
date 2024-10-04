@@ -1,5 +1,18 @@
 import type { Handler, HandlerEvent } from "@netlify/functions";
+import { IncomingMessage } from "http";
 import * as unzipper from 'unzipper';
+import * as formidable from "formidable";
+
+const parseForm =  (req: IncomingMessage): Promise<{ fields: any; files: any }> => 
+    new Promise((resolve, reject) => {
+      const form = new formidable.IncomingForm();
+      form.parse(req, (err, fields, files) => {
+        if (err) {
+          reject(err);
+        }
+        resolve({ fields, files });
+      });
+    });
 
 export const handler: Handler = async (event: HandlerEvent) => {
   if(event.httpMethod !== "POST") {
@@ -10,31 +23,36 @@ export const handler: Handler = async (event: HandlerEvent) => {
   }
 
   try {
+    const req = event as unknown as IncomingMessage;
     // Check if there's any body to process (ensure body contains ZIP file)
-    if (!event.body) {
+    const { fields, files } = await parseForm(req);
+
+    const jsonData = fields.json ? JSON.parse(fields.json) : null;
+
+    const zipFile = files.zipFile;
+    if (!zipFile) {
       return {
         statusCode: 400,
-        body: JSON.stringify({ message: 'No file uploaded' }),
+        body: JSON.stringify({ message: 'No ZIP file uploaded' }),
       };
     }
 
-    // Decode the base64-encoded body (Netlify functions receive files as base64 strings)
-    const zipBuffer = Buffer.from(event.body, 'base64');
-
-    // Unzip and extract files from the ZIP buffer
-    const directory = await unzipper.Open.buffer(zipBuffer);
-
+    // Read the zip file and extract its contents
+    const zipBuffer = await unzipper.Open.file(zipFile.path);
+    
     const fileData: Record<string, string> = {};
-    for (const file of directory.files) {
+    for (const file of zipBuffer.files) {
       const content = await file.buffer();
-      fileData[file.path] = content.toString('utf-8'); // Convert file content to a string
+      fileData[file.path] = content.toString('utf-8');
     }
 
+    // Send back the extracted ZIP content along with the JSON data
     return {
       statusCode: 200,
       body: JSON.stringify({
-        message: 'ZIP file processed successfully',
-        files: fileData, // This will contain the file names and their content
+        message: 'ZIP file and JSON processed successfully',
+        jsonData: jsonData, // Your parsed JSON data
+        files: fileData, // Extracted ZIP file content
       }),
     };
   } catch (err) {
